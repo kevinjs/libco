@@ -50,7 +50,7 @@ struct stCoEpoll_t;
 
 struct stCoRoutineEnv_t
 {
-	stCoRoutine_t *pCallStack[ 128 ];
+	stCoRoutine_t *pCallStack[ 128 ];		// 记录协程调用关系链的栈(但并非协程栈)
 	int iCallStackSize;
 	stCoEpoll_t *pEpoll;
 
@@ -352,11 +352,11 @@ struct stTimeoutItemLink_t
 };
 struct stTimeout_t
 {
-	stTimeoutItemLink_t *pItems;
-	int iItemSize;
+	stTimeoutItemLink_t *pItems;	// 时间轮上的槽位组成的链表
+	int iItemSize;					// 固定长度 60 * 1000 ms
 
-	unsigned long long ullStart;
-	long long llStartIdx;
+	unsigned long long ullStart;	// 标定协程环境开始的时间戳
+	long long llStartIdx;			// 毫秒针步长
 };
 stTimeout_t *AllocTimeout( int iSize )
 {
@@ -365,7 +365,7 @@ stTimeout_t *AllocTimeout( int iSize )
 	lp->iItemSize = iSize;
 	lp->pItems = (stTimeoutItemLink_t*)calloc( 1,sizeof(stTimeoutItemLink_t) * lp->iItemSize );
 
-	lp->ullStart = GetTickMS();
+	lp->ullStart = GetTickMS(); 
 	lp->llStartIdx = 0;
 
 	return lp;
@@ -396,8 +396,11 @@ int AddTimeout( stTimeout_t *apTimeout,stTimeoutItem_t *apItem ,unsigned long lo
 
 		return __LINE__;
 	}
+
+	// 计算时间间隔
 	unsigned long long diff = apItem->ullExpireTime - apTimeout->ullStart;
 
+	// 检查超时时间间隔
 	if( diff >= (unsigned long long)apTimeout->iItemSize )
 	{
 		diff = apTimeout->iItemSize - 1;
@@ -406,6 +409,9 @@ int AddTimeout( stTimeout_t *apTimeout,stTimeoutItem_t *apItem ,unsigned long lo
 
 		//return __LINE__;
 	}
+
+	// 1.确定超时项所在槽位
+	// 2.将超时项追加在槽位链表末尾
 	AddTail( apTimeout->pItems + ( apTimeout->llStartIdx + diff ) % apTimeout->iItemSize , apItem );
 
 	return 0;
@@ -522,7 +528,7 @@ int co_create( stCoRoutine_t **ppco,const stCoRoutineAttr_t *attr,pfn_co_routine
 {
 	if( !co_get_curr_thread_env() ) 
 	{
-		co_init_curr_thread_env();
+		co_init_curr_thread_env(); // 如果没有初始化过env
 	}
 	stCoRoutine_t *co = co_create_env( co_get_curr_thread_env(), attr, pfn,arg );
 	*ppco = co;
@@ -559,7 +565,7 @@ void co_resume( stCoRoutine_t *co )
 {
 	stCoRoutineEnv_t *env = co->env;
 	stCoRoutine_t *lpCurrRoutine = env->pCallStack[ env->iCallStackSize - 1 ];
-	if( !co->cStart )
+	if( !co->cStart ) // 判定是否是协程首次启动
 	{
 		coctx_make( &co->ctx,(coctx_pfn_t)CoRoutineFunc,co,0 );
 		co->cStart = 1;
@@ -612,7 +618,7 @@ void co_yield_ct()
 }
 void co_yield( stCoRoutine_t *co )
 {
-	co_yield_env( co->env );
+	co_yield_env( co->env ); // 这里虽然参数中可以指定co，但是并不是说可以将cpu让给co指向的协程，而是还给env
 }
 
 void save_stack_buffer(stCoRoutine_t* occupy_co)
@@ -742,10 +748,10 @@ static __thread stCoRoutineEnv_t* gCoEnvPerThread = NULL;
 void co_init_curr_thread_env()
 {
 	gCoEnvPerThread = (stCoRoutineEnv_t*)calloc( 1, sizeof(stCoRoutineEnv_t) );
-	stCoRoutineEnv_t *env = gCoEnvPerThread;
+	stCoRoutineEnv_t *env = gCoEnvPerThread; // 创建env，同一个线程的协程共享
 
 	env->iCallStackSize = 0;
-	struct stCoRoutine_t *self = co_create_env( env, NULL, NULL,NULL );
+	struct stCoRoutine_t *self = co_create_env( env, NULL, NULL,NULL ); // 创建主协程
 	self->cIsMain = 1;
 
 	env->pending_co = NULL;
@@ -753,7 +759,7 @@ void co_init_curr_thread_env()
 
 	coctx_init( &self->ctx );
 
-	env->pCallStack[ env->iCallStackSize++ ] = self;
+	env->pCallStack[ env->iCallStackSize++ ] = self; // 主协程放置在协程调用栈的0位置，主协程不会yield
 
 	stCoEpoll_t *ev = AllocEpoll();
 	SetEpoll( env,ev );
